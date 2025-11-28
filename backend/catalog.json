@@ -1,0 +1,85 @@
+{
+  "categories": [
+    {
+      "name": "Groceries",
+      "items": [
+        {
+          "id": "bread",
+          "name": "Whole Wheat Bread",
+          "price": 3.50,
+          "tags": ["vegan", "bakery", "staple"]
+        },
+        {
+          "id": "milk",
+          "name": "Organic Whole Milk",
+          "price": 4.20,
+          "tags": ["dairy", "staple"]
+        },
+        {
+          "id": "eggs",
+          "name": "Free Range Eggs (Dozen)",
+          "price": 5.00,
+          "tags": ["dairy", "protein"]
+        },
+        {
+          "id": "peanut_butter",
+          "name": "Creamy Peanut Butter",
+          "price": 4.50,
+          "tags": ["vegan", "pantry"]
+        },
+        {
+          "id": "jelly",
+          "name": "Strawberry Jelly",
+          "price": 3.00,
+          "tags": ["vegan", "pantry"]
+        },
+        {
+          "id": "pasta",
+          "name": "Spaghetti Pasta",
+          "price": 2.00,
+          "tags": ["vegan", "pantry", "italian"]
+        },
+        {
+          "id": "pasta_sauce",
+          "name": "Marinara Sauce",
+          "price": 3.50,
+          "tags": ["vegan", "pantry", "italian"]
+        }
+      ]
+    },
+    {
+      "name": "Snacks",
+      "items": [
+        {
+          "id": "chips",
+          "name": "Potato Chips",
+          "price": 2.50,
+          "tags": ["vegan", "snack"]
+        },
+        {
+          "id": "cookies",
+          "name": "Chocolate Chip Cookies",
+          "price": 3.00,
+          "tags": ["snack", "sweet"]
+        }
+      ]
+    },
+    {
+      "name": "Prepared Food",
+      "items": [
+        {
+          "id": "pizza",
+          "name": "Cheese Pizza",
+          "price": 12.00,
+          "tags": ["hot", "italian"]
+        },
+        {
+          "id": "sandwich",
+          "name": "Veggie Sandwich",
+          "price": 7.50,
+          "tags": ["fresh", "lunch"]
+        }
+      ]
+    }
+  ]
+}
