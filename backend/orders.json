@@ -1,0 +1,11 @@
+[
+  {
+    "order_id": "ORD-001",
+    "product_id": "hoodie-001",
+    "product_name": "Cozy Grey Hoodie",
+    "quantity": 1,
+    "total_price": 49.99,
+    "currency": "USD",
+    "timestamp": "2025-11-30T16:23:24.276913"
+  }
+]

@@ -1,7 +1,8 @@
 import logging
-import os
 import json
-from typing import Annotated, Dict, Any
+import os
+from typing import Annotated, Dict, Any, List
+from datetime import datetime
 
 from dotenv import load_dotenv
 from livekit.agents import (
@@ -9,7 +10,6 @@ from livekit.agents import (
     AgentSession,
     JobContext,
     JobProcess,
-    MetricsCollectedEvent,
     WorkerOptions,
     cli,
     metrics,
@@ -21,165 +21,155 @@ from livekit.agents.llm import ChatMessage
 from livekit.plugins import murf, silero, google, deepgram
 from livekit.plugins.turn_detector.multilingual import MultilingualModel
 
-logger = logging.getLogger("agent")
+logger = logging.getLogger("ecommerce-agent")
 
 load_dotenv(".env.local")
 
-# --- World State ---
+# --- E-commerce Data & Logic ---
 
-class WorldState:
-    def __init__(self):
-        self.state = {
-            "location": {
-                "name": "Forgotten Caverns Entrance",
-                "description": "A dark, gaping maw in the mountainside. Cold wind blows from within.",
-                "known_paths": ["Enter the cave", "Walk along the mountain path"]
-            },
-            "player": {
-                "hp": 20,
-                "max_hp": 20,
-                "inventory": ["Torch", "Rations", "Short Sword"],
-                "status": "Healthy"
-            },
-            "events": [],
-            "npcs": []
-        }
+PRODUCTS = [
+    {
+        "id": "mug-001",
+        "name": "Classic White Coffee Mug",
+        "description": "A simple, elegant white ceramic mug. Perfect for your morning brew.",
+        "price": 12.99,
+        "currency": "USD",
+        "category": "kitchen"
+    },
+    {
+        "id": "mug-002",
+        "name": "Travel Tumbler",
+        "description": "Insulated stainless steel tumbler to keep your drinks hot or cold.",
+        "price": 24.99,
+        "currency": "USD",
+        "category": "kitchen"
+    },
+    {
+        "id": "shirt-001",
+        "name": "Developer T-Shirt",
+        "description": "Black cotton t-shirt with 'I turn coffee into code' print.",
+        "price": 29.99,
+        "currency": "USD",
+        "category": "apparel",
+        "sizes": ["S", "M", "L", "XL"]
+    },
+    {
+        "id": "hoodie-001",
+        "name": "Cozy Grey Hoodie",
+        "description": "Soft fleece hoodie, perfect for coding sessions.",
+        "price": 49.99,
+        "currency": "USD",
+        "category": "apparel",
+        "sizes": ["M", "L", "XL"]
+    }
+]
 
-    def update_location(self, name: str, description: str):
-        self.state["location"]["name"] = name
-        self.state["location"]["description"] = description
+ORDERS = []
 
-    def add_item(self, item: str):
-        self.state["player"]["inventory"].append(item)
-
-    def remove_item(self, item: str):
-        if item in self.state["player"]["inventory"]:
-            self.state["player"]["inventory"].remove(item)
-
-    def update_hp(self, amount: int):
-        self.state["player"]["hp"] += amount
-        if self.state["player"]["hp"] > self.state["player"]["max_hp"]:
-            self.state["player"]["hp"] = self.state["player"]["max_hp"]
-        
-        # Update status based on HP
-        hp_percent = self.state["player"]["hp"] / self.state["player"]["max_hp"]
-        if hp_percent <= 0:
-            self.state["player"]["status"] = "Unconscious"
-        elif hp_percent < 0.3:
-            self.state["player"]["status"] = "Critical"
-        elif hp_percent < 0.7:
-            self.state["player"]["status"] = "Injured"
-        else:
-            self.state["player"]["status"] = "Healthy"
-
-    def add_event(self, event: str):
-        self.state["events"].append(event)
-
-    def get_context(self) -> str:
-        return json.dumps(self.state, indent=2)
-
-# --- Agent Class ---
-
-class GameMaster(Agent):
+class EcommerceAgent(Agent):
     def __init__(self) -> None:
-        self.world = WorldState()
         super().__init__(
-            instructions=f"""You are a Dungeon Master (DM) running a D&D-style interactive adventure.
+            instructions="""You are a helpful voice shopping assistant for an online store.
             
-            **Setting:** A classic high-fantasy world.
-            **Tone:** Dramatic, immersive, and slightly mysterious.
+            **Your Goal:** Help users find products and place orders.
             
-            **World State:**
-            You have access to a JSON 'World State' that tracks the player's location, health, inventory, and past events.
-            ALWAYS use this state to inform your descriptions and decisions.
+            **Capabilities:**
+            1. **Search/Browse:** Use `list_products` to find items based on user requests.
+            2. **Order:** Use `create_order` when the user confirms they want to buy something.
+            3. **History:** Use `get_last_order` if the user asks about their recent purchase.
             
-            **Your Responsibilities:**
-            1. **Describe:** Vividly describe the current scene based on the 'location' in the World State.
-            2. **Update:** Use tools to update the World State when the player moves, finds items, takes damage, or triggers events.
-            3. **React:** Listen to the player's action ("What do you do?") and determine the outcome.
-            4. **Maintain:** Ensure continuity. If an NPC is dead, they stay dead.
+            **Personality:**
+            - Professional, polite, and efficient.
+            - Keep responses concise (ideal for voice).
+            - Confirm details before placing an order.
             
-            **Tools:**
-            - `update_world_state`: Call this whenever the state changes (move location, get item, damage, etc.).
-            - `get_world_state`: Call this if you need to refresh your memory of the state (though it's provided in context).
-            
-            **Gameplay Loop:**
-            - Player acts -> You determine outcome -> You UPDATE state (if needed) -> You DESCRIBE the new situation -> You ask "What do you do?".
-            
-            **Important:**
-            - Keep descriptions concise for voice (2-3 sentences).
-            - Be fair. Risky actions require checks (you can simulate dice rolls internally or just decide based on logic).
+            **Flow:**
+            - User asks for products -> You call `list_products` -> You summarize results.
+            - User selects item -> You confirm details (quantity, etc.) -> You call `create_order`.
+            - User asks "What did I buy?" -> You call `get_last_order`.
             """,
         )
 
     @function_tool
-    async def update_world_state(
-        self, 
-        ctx: RunContext,
-        location_name: str = None,
-        location_description: str = None,
-        item_added: str = None,
-        item_removed: str = None,
-        hp_change: int = 0,
-        event_log: str = None
-    ):
-        """Update the game world state. Call this when significant changes happen.
+    async def list_products(self, ctx: RunContext, query: str = None, category: str = None):
+        """List available products, optionally filtered by a search query or category.
         
         Args:
-            location_name: New location name (if moved).
-            location_description: Description of the new location (if moved).
-            item_added: Name of item added to inventory.
-            item_removed: Name of item removed from inventory.
-            hp_change: Change in HP (negative for damage, positive for healing).
-            event_log: A brief string describing a key event that happened (e.g., "Met the Goblin King").
+            query: Search term (e.g., "mug", "shirt").
+            category: Filter by category (e.g., "kitchen", "apparel").
         """
-        if location_name and location_description:
-            self.world.update_location(location_name, location_description)
-        
-        if item_added:
-            self.world.add_item(item_added)
+        results = []
+        for p in PRODUCTS:
+            if category and p.get("category") != category:
+                continue
             
-        if item_removed:
-            self.world.remove_item(item_removed)
+            if query:
+                q = query.lower()
+                if q not in p["name"].lower() and q not in p["description"].lower():
+                    continue
             
-        if hp_change != 0:
-            self.world.update_hp(hp_change)
+            results.append(p)
             
-        if event_log:
-            self.world.add_event(event_log)
-            
-        return f"World state updated. Current State: {self.world.get_context()}"
+        return json.dumps(results)
 
     @function_tool
-    async def get_world_state(self, ctx: RunContext):
-        """Get the full current JSON world state."""
-        return self.world.get_context()
+    async def create_order(self, ctx: RunContext, product_id: str, quantity: int = 1):
+        """Place a new order for a product.
+        
+        Args:
+            product_id: The ID of the product to buy.
+            quantity: The number of items to purchase.
+        """
+        product = next((p for p in PRODUCTS if p["id"] == product_id), None)
+        if not product:
+            return "Error: Product not found."
+            
+        total_price = product["price"] * quantity
+        
+        order = {
+            "order_id": f"ORD-{len(ORDERS) + 1:03d}",
+            "product_id": product_id,
+            "product_name": product["name"],
+            "quantity": quantity,
+            "total_price": total_price,
+            "currency": product["currency"],
+            "timestamp": datetime.now().isoformat()
+        }
+        
+        ORDERS.append(order)
+        
+        # Optionally save to file
+        try:
+            with open("orders.json", "w") as f:
+                json.dump(ORDERS, f, indent=2)
+        except Exception as e:
+            logger.error(f"Failed to save orders to file: {e}")
+            
+        return json.dumps(order)
+
+    @function_tool
+    async def get_last_order(self, ctx: RunContext):
+        """Retrieve the most recent order placed in this session."""
+        if not ORDERS:
+            return "No orders found."
+        return json.dumps(ORDERS[-1])
 
 
 def prewarm(proc: JobProcess):
     proc.userdata["vad"] = silero.VAD.load()
 
-import traceback
-
 async def entrypoint(ctx: JobContext):
     try:
         print(f"--- AGENT STARTING ---")
-        # Logging setup
-        ctx.log_context_fields = {
-            "room": ctx.room.name,
-        }
+        ctx.log_context_fields = {"room": ctx.room.name}
 
         print(f"Connecting to room: {ctx.room.name}")
-        # Join the room and connect to the user
         await ctx.connect()
         print(f"--- AGENT CONNECTED to {ctx.room.name} ---")
 
-        # Set up a voice AI pipeline
         session = AgentSession(
             stt=deepgram.STT(model="nova-3"),
-            llm=google.LLM(
-                    model="gemini-2.5-flash",
-                ),
+            llm=google.LLM(model="gemini-2.5-flash"),
             tts=murf.TTS(
                 voice="en-US-matthew", 
                 style="Conversation",
@@ -193,40 +183,24 @@ async def entrypoint(ctx: JobContext):
 
         @session.on("agent_speech_committed")
         def on_agent_speech(msg: ChatMessage):
-            print(f"--- AGENT SPEAKING (Murf): {msg.content} ---")
+            print(f"--- AGENT SPEAKING: {msg.content} ---")
             
         @session.on("agent_speech_interrupted")
         def on_agent_interrupted(msg: ChatMessage):
             print(f"--- AGENT INTERRUPTED: {msg.content} ---")
 
-        usage_collector = metrics.UsageCollector()
-
-        @session.on("metrics_collected")
-        def _on_metrics_collected(ev: MetricsCollectedEvent):
-            metrics.log_metrics(ev.metrics)
-            usage_collector.collect(ev.metrics)
-
-        async def log_usage():
-            summary = usage_collector.get_summary()
-            logger.info(f"Usage: {summary}")
-
-        ctx.add_shutdown_callback(log_usage)
-
         print("--- SESSION STARTING ---")
-        # Start the session
         await session.start(
-            agent=GameMaster(),
+            agent=EcommerceAgent(),
             room=ctx.room,
         )
         print("--- SESSION STARTED ---")
 
-        await session.say("Welcome, adventurer. You find yourself standing at the entrance of the Forgotten Caverns. A cold wind blows from within. What do you do?", allow_interruptions=True)
-        print("--- GREETING SENT ---")
+        await session.say("Hello! I'm your shopping assistant. How can I help you today?", allow_interruptions=True)
 
     except Exception:
-        print("--- CRASH DETECTED ---")
+        import traceback
         traceback.print_exc()
-
 
 if __name__ == "__main__":
     cli.run_app(WorkerOptions(entrypoint_fnc=entrypoint, prewarm_fnc=prewarm))
